@@ -13,19 +13,26 @@ const env = getEnv();
 
 const app = express();
 
-// CORS for Vercel
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  process.env.FRONTEND_URL, 
+  process.env.FRONTEND_PREVIEW_PATTERN
+].filter(Boolean) as (string | RegExp)[];
+
+if (process.env.FRONTEND_PREVIEW_PATTERN) {
+  const index = allowedOrigins.indexOf(process.env.FRONTEND_PREVIEW_PATTERN);
+  if (index !== -1) {
+    // This turns the string into a secure Regex: ^https://arcstream-frontend-.*\.onrender\.com$
+    allowedOrigins[index] = new RegExp(process.env.FRONTEND_PREVIEW_PATTERN);
+  }
+}
+
 app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'https://arcstream.vercel.app',
-    'https://arcstream-*.vercel.app',
-    process.env.FRONTEND_URL || ''
-  ].filter(Boolean),
+  origin: allowedOrigins,
   credentials: true,
   exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length', 'Content-Type'],
 }));
-
 app.use(helmet({ 
   contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false 
