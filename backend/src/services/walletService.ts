@@ -113,7 +113,7 @@ export async function getUSDCBalance(walletAddress: string) {
       abi: USDC_ABI,
       functionName: 'balanceOf',
       args: [walletAddress as Address],
-    });
+    }as any);
 
     return {
       success: true,
