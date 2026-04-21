@@ -3,7 +3,7 @@
 import { z } from 'zod';
 
 const envSchema = z.object({
-  PORT: z.coerce.number().default(10000),
+  PORT: z.coerce.number().default(3001),
   NODE_ENV: z.enum(['development', 'staging', 'production']).default('development'),
   CIRCLE_API_KEY: z.string().min(1),
   CIRCLE_ENTITY_SECRET: z.string().min(1),

@@ -23,7 +23,7 @@ app.use(helmet({
 // backend/src/index.ts - Update CORS configuration
 
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:3001'],
+  origin: ['http://localhost:3000', 'http://localhost:3001', process.env.FRONTEND_URL || ''],
   credentials: true,
   exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length', 'Content-Type'],
 }));
