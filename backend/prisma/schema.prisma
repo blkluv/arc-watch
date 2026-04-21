@@ -1,0 +1,84 @@
+// backend/prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+  output = "../src/generated/prisma"
+  engineType = "library"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id              String   @id @default(uuid())
+  eoaAddress      String   @unique 
+  dcwAddress      String   @unique 
+  circleWalletId  String?  
+  sessionSigner   String?  @unique 
+  
+  payments        Payment[]
+  videosCreated   Video[]
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([eoaAddress])
+  @@index([dcwAddress])
+  @@index([sessionSigner])
+}
+
+model Video {
+  id              String    @id @default(uuid())
+  title           String
+  description     String?
+  
+  hlsManifestUrl  String
+  hlsBaseUrl      String?
+  
+  // Pricing config
+  pricePerSession Decimal   @db.Decimal(10, 6)
+  sessionDuration Int       // ✅ Chunk duration in SECONDS (stores the actual seconds)
+  
+  durationSeconds Int
+  creatorAddress  String
+  creatorDcw      String
+  
+  payments        Payment[]
+  user            User?     @relation(fields: [creatorAddress], references: [eoaAddress])
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([creatorAddress])
+  @@index([createdAt, id])
+}
+
+model Payment {
+  id           String    @id @default(uuid())
+  
+  userId       String
+  videoId      String
+  sessionIndex Int
+  
+  txHash       String?
+  amount       Decimal   @db.Decimal(10, 6)
+  nonce        String?
+  
+  timestamp    DateTime  @default(now())
+  status       PaymentStatus @default(VERIFIED)
+  
+  user         User      @relation(fields: [userId], references: [id])
+  video        Video     @relation(fields: [videoId], references: [id])
+
+  @@unique([userId, videoId, sessionIndex])
+  @@index([userId, videoId, timestamp])
+  @@index([videoId, sessionIndex])
+}
+
+enum PaymentStatus {
+  PENDING
+  VERIFIED
+  FAILED
+  REFUNDED
+}

@@ -1,0 +1,56 @@
+// // backend/src/lib/prisma.ts
+
+// // ✅ Prisma 7: Import from generated path
+// import { PrismaClient } from '../generated/prisma/client';
+// // ✅ Import adapter packages
+// import { PrismaPg } from '@prisma/adapter-pg';
+// import { Pool } from 'pg';
+// import { env } from 'prisma/config';
+
+// // ✅ Create adapter instance for direct PostgreSQL connection
+// const pool = new Pool({ connectionString: env("DATABASE_URL") });
+// const adapter = new PrismaPg(pool);
+
+// const globalForPrisma = global as unknown as { prisma: PrismaClient };
+
+// // ✅ Pass adapter to PrismaClient constructor (NOT in prisma.config.ts)
+// export const prisma = globalForPrisma.prisma ?? new PrismaClient({
+//   adapter, // ✅ Direct connection adapter
+//   log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+// });
+
+// if (process.env.NODE_ENV !== 'production') {
+//   globalForPrisma.prisma = prisma;
+// }
+
+// export default prisma;
+
+
+// backend/src/lib/prisma.ts
+
+import { PrismaClient } from '../generated/prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { Pool } from 'pg';
+
+// For serverless, use connection pooling with smaller limits
+const pool = new Pool({ 
+  connectionString: process.env.DATABASE_URL,
+  max: 3, // Reduced for serverless
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
+});
+
+const adapter = new PrismaPg(pool);
+
+const globalForPrisma = global as unknown as { prisma: PrismaClient };
+
+export const prisma = globalForPrisma.prisma ?? new PrismaClient({
+  adapter,
+  log: ['error'],
+});
+
+if (process.env.NODE_ENV !== 'production') {
+  globalForPrisma.prisma = prisma;
+}
+
+export default prisma;
