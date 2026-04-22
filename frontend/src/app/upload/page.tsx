@@ -47,23 +47,21 @@ export default function UploadPage() {
   };
 
   // ✅ CORRECT client-side upload using Vercel Blob client
-  const uploadDirectToBlob = async (file: File): Promise<string> => {
-    console.log('📤 Starting client upload to Vercel Blob...');
-    
-    // ✅ Use the upload function with handleUploadUrl as a STRING (not a function)
-    const blob = await upload(file.name, file, {
-      access: 'public',
-      handleUploadUrl: `${process.env.NEXT_PUBLIC_API_URL}/videos/upload-token`, // ✅ URL string!
-      clientPayload: JSON.stringify({
-        eoaAddress: eoaAddress,
-        filename: file.name,
-      }),
-    });
+const uploadDirectToBlob = async (file: File): Promise<string> => {
+  console.log('📤 Starting client upload to Vercel Blob...');
+  
+  const blob = await upload(file.name, file, {
+    access: 'public',
+    handleUploadUrl: `${process.env.NEXT_PUBLIC_API_URL}/videos/upload-token`,
+    clientPayload: JSON.stringify({
+      eoaAddress: eoaAddress,  // ✅ Pass EOA address for authentication
+      filename: file.name,
+    }),
+  });
 
-    console.log('✅ Blob upload complete:', blob.url);
-    return blob.url;
-  };
-
+  console.log('✅ Blob upload complete:', blob.url);
+  return blob.url;
+};
   const processFile = (file: File) => {
     if (file.size > MAX_FILE_SIZE) {
       toast.error(`File size must be less than 5GB`);

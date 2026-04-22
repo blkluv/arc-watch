@@ -7,7 +7,6 @@ import dotenv from 'dotenv';
 import { logTransaction, getTransactionStats } from './utils/transactionLogger';
 import { getEnv } from './config/environment';
 
-
 // Load and validate environment variables FIRST
 dotenv.config();
 const env = getEnv();
@@ -20,10 +19,16 @@ app.use(helmet({
   contentSecurityPolicy: process.env.NODE_ENV === 'production' ? undefined : false,
   crossOriginEmbedderPolicy: false 
 }));
-// backend/src/index.ts - Update CORS configuration
 
+// CORS configuration
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:3001', process.env.FRONTEND_URL || ''],
+  origin: [
+    'http://localhost:3000', 
+    'http://localhost:3001', 
+    'https://arcstream-frontend.onrender.com',
+    'https://arcstream.vercel.app',
+    process.env.FRONTEND_URL || ''
+  ].filter(Boolean),
   credentials: true,
   exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length', 'Content-Type'],
 }));
@@ -38,8 +43,10 @@ app.use('/api/videos/:id/stream', (req, res, next) => {
   next();
 });
 
+// ✅ INCREASE limit for Vercel Blob client upload requests
+app.use('/api/videos/upload-token', express.json({ limit: '50mb' }));
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Request logging (production-ready)
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -69,6 +76,7 @@ app.use('/api/videos', require('./routes/videos'));
 app.use('/api/podcasts', require('./routes/podcasts'));
 app.use('/api/media', require('./routes/media').default);
 app.use('/api/auth', require('./routes/auth').default);
+
 // Payment logging middleware wrapper
 app.use((req: Request, res: Response, next: NextFunction) => {
   const originalJson = res.json.bind(res);
@@ -91,13 +99,13 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// ✅ FIXED: Stats endpoint with CORRECT JSON syntax (data: {...})
+// Stats endpoint
 app.get('/api/stats', (req: Request, res: Response) => {
   const stats = getTransactionStats();
   
   res.json({
     success: true,
-    data: {  // ✅ CORRECT: 'data:' key before the object
+    data: {
       ...stats,
       hackathonRequirement: {
         minTransactions: 50,

@@ -14,8 +14,6 @@ import multer from 'multer';
 import { handleUpload } from '@vercel/blob/client';
 import type { HandleUploadBody } from '@vercel/blob/client';
 
-
-
 const router = express.Router();
 
 // --- Vercel Blob Configuration ---
@@ -57,52 +55,93 @@ const getAuthenticatedUser = (req: Request) => {
 
 // --- ROUTES ---
 
-// Generate upload token for direct browser upload
-// ✅ Client upload handler endpoint
+// ✅ Client upload handler endpoint for Vercel Blob
 router.post('/upload-token', async (req: Request, res: Response) => {
+  console.log('📤 Upload token request received');
+  
   try {
-    const authenticatedUser = getAuthenticatedUser(req);
-    if (!authenticatedUser?.eoaAddress) {
+    const body = req.body as HandleUploadBody;
+    
+    // ✅ Extract clientPayload from the correct location
+    let eoaAddress: string | null = null;
+    
+    try {
+      // The client payload comes in the body's payload.clientPayload field
+      const payload = (body as any).payload?.clientPayload 
+        ? JSON.parse((body as any).payload.clientPayload) 
+        : null;
+      eoaAddress = payload?.eoaAddress;
+      
+      console.log('📝 EOA from clientPayload:', eoaAddress);
+    } catch (e) {
+      console.error('Failed to parse clientPayload:', e);
+    }
+
+    // Alternative: Check for EOA in headers as fallback
+    if (!eoaAddress) {
+      const authHeader = req.headers['authorization'];
+      if (authHeader?.startsWith('Bearer ')) {
+        eoaAddress = authHeader.slice(7);
+        console.log('📝 EOA from Authorization header:', eoaAddress);
+      }
+    }
+
+    if (!eoaAddress) {
+      console.error('❌ No EOA address found');
       return res.status(401).json({ error: 'Authentication required.' });
+    }
+
+    // ✅ Verify user exists in database
+    try {
+      const user = await prisma.user.findUnique({
+        where: { eoaAddress: getAddress(eoaAddress) }
+      });
+
+      if (!user) {
+        console.error('❌ User not found:', eoaAddress);
+        return res.status(401).json({ error: 'User not found.' });
+      }
+      console.log('✅ User authenticated:', user.eoaAddress);
+    } catch (err) {
+      console.error('❌ User lookup failed:', err);
+      return res.status(401).json({ error: 'Authentication failed.' });
     }
 
     if (!process.env.BLOB_READ_WRITE_TOKEN) {
       return res.status(500).json({ error: 'Blob storage not configured' });
     }
 
-    const body = req.body as HandleUploadBody;
-
+    console.log('📤 Calling handleUpload...');
+    
     const jsonResponse = await handleUpload({
       body,
       request: req,
       token: process.env.BLOB_READ_WRITE_TOKEN,
-      onBeforeGenerateToken: async (pathname, clientPayload) => {
-        // Generate a clean pathname
+      onBeforeGenerateToken: async (pathname) => {
         const timestamp = Date.now();
         const safePath = `videos/${timestamp}-${pathname.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+        
+        console.log('📝 Generating token for path:', safePath);
         
         return {
           pathname: safePath,
           allowedContentTypes: ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-msvideo'],
           maximumSizeInBytes: 5 * 1024 * 1024 * 1024, // 5GB
+          validUntil: Date.now() + 10 * 60 * 1000, // 10 minutes
         };
       },
-      onUploadCompleted: async ({ blob, tokenPayload }) => {
+      onUploadCompleted: async ({ blob }) => {
         console.log('✅ Upload completed:', blob.url);
-        // The actual video record is created in confirm-upload endpoint
       },
     });
 
+    console.log('✅ Upload token generated successfully');
     return res.status(200).json(jsonResponse);
   } catch (err: any) {
-    console.error('Upload token error:', err);
+    console.error('❌ Upload token error:', err);
     return res.status(400).json({ error: err.message });
   }
 });
-
-
-
-
 
 // Confirm upload and create video record
 router.post('/confirm-upload', async (req: Request, res: Response) => {
@@ -121,6 +160,14 @@ router.post('/confirm-upload', async (req: Request, res: Response) => {
       chunkDurationSeconds = Math.round(value * 60);
     } else {
       chunkDurationSeconds = Math.round(value);
+    }
+
+    // Validate chunk duration
+    if (chunkDurationSeconds < 5) {
+      return res.status(400).json({ error: 'Chunk duration must be at least 5 seconds' });
+    }
+    if (chunkDurationSeconds > 3600) {
+      return res.status(400).json({ error: 'Chunk duration cannot exceed 60 minutes' });
     }
 
     // Find User in DB
@@ -151,8 +198,7 @@ router.post('/confirm-upload', async (req: Request, res: Response) => {
   }
 });
 
-
-// 1. POST /api/videos - Create new video with Vercel Blob Upload
+// 1. POST /api/videos - Create new video with Vercel Blob Upload (Server-side fallback)
 router.post('/', upload.single('video'), async (req: Request, res: Response) => {
   console.log('\n📤 ====== UPLOAD REQUEST RECEIVED ======');
   console.log('File object:', req.file ? {
@@ -193,7 +239,7 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
       });
     }
 
-    // ✅ Upload to Vercel Blob
+    // Upload to Vercel Blob
     const timestamp = Date.now();
     const safeFilename = req.file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
     const blobPath = `videos/${timestamp}-${safeFilename}`;
@@ -357,7 +403,6 @@ router.delete('/:id', async (req: Request, res: Response) => {
   if (!authenticatedUser?.eoaAddress) return res.status(401).json({ error: 'Auth required' });
 
   try {
-    // ✅ Use Prisma directly since getVideoById returns transformed object
     const video = await prisma.video.findUnique({ where: { id: videoId } });
     if (!video) return res.status(404).json({ error: 'Video not found' });
     
