@@ -1,4 +1,5 @@
 // backend/src/services/authService.ts
+
 import { SiweMessage } from 'siwe';
 import { getAddress, verifyMessage } from 'viem';
 import { getWalletsClient } from './walletService';
@@ -20,49 +21,83 @@ export async function authenticateAndLink(
   message: string
 ): Promise<{ eoa: string; dcwAddress: string; isNew: boolean }> {
   
+  console.log('🔐 authenticateAndLink called for:', eoa);
+  
   const checksummed = getAddress(eoa);
 
   // 1. Verify Nonce
   const cached = NONCE_CACHE.get(eoa.toLowerCase());
-  if (!cached || cached.nonce !== nonce) throw new Error('Invalid nonce');
+  if (!cached || cached.nonce !== nonce) {
+    console.error('❌ Invalid nonce');
+    throw new Error('Invalid nonce');
+  }
 
   // 2. Verify SIWE
-  const siweMessage = new SiweMessage(message);
-  const isValid = await verifyMessage({
-    address: checksummed as `0x${string}`,
-    message: message,
-    signature: signature as `0x${string}`
-  });
+  try {
+    const siweMessage = new SiweMessage(message);
+    const isValid = await verifyMessage({
+      address: checksummed as `0x${string}`,
+      message: message,
+      signature: signature as `0x${string}`
+    });
 
-  if (!isValid) throw new Error('Signature failed');
+    if (!isValid) {
+      console.error('❌ Signature verification failed');
+      throw new Error('Signature failed');
+    }
+    console.log('✅ Signature verified');
+  } catch (err: any) {
+    console.error('❌ SIWE verification error:', err.message);
+    throw new Error('Signature verification failed: ' + err.message);
+  }
 
   // 3. DB Lookup / Create
   let user = await prisma.user.findUnique({ where: { eoaAddress: checksummed } });
   
   if (!user) {
-    // Create Circle DCW with SCA account type
-    const client = getWalletsClient();
-    const walletSet = await client.createWalletSet({ name: `ArcStream-${checksummed.slice(0, 8)}` });
-    const wallets = await client.createWallets({
-      blockchains: ['ARC-TESTNET'],
-      count: 1,
-      walletSetId: walletSet.data!.walletSet!.id,
-      accountType: 'SCA', // ✅ Use SCA for Arc Testnet
-    });
-
-    const dcw = wallets.data!.wallets![0];
-
-    user = await prisma.user.create({
-      data: {
-        eoaAddress: checksummed,
-        dcwAddress: dcw.address!,
-        circleWalletId: dcw.id!,
-      },
-    });
+    console.log('🆕 Creating new user with Circle DCW...');
     
-    console.log(`✅ Created new SCA wallet for ${checksummed}: ${dcw.address}`);
-    return { eoa: checksummed, dcwAddress: user.dcwAddress, isNew: true };
+    try {
+      const client = getWalletsClient();
+      
+      // Create wallet set
+      console.log('   Creating wallet set...');
+      const walletSet = await client.createWalletSet({ 
+        name: `ArcStream-${checksummed.slice(0, 8)}` 
+      });
+      console.log('   Wallet set created:', walletSet.data?.walletSet?.id);
+      
+      // Create wallet
+      console.log('   Creating SCA wallet...');
+      const wallets = await client.createWallets({
+        blockchains: ['ARC-TESTNET'],
+        count: 1,
+        walletSetId: walletSet.data!.walletSet!.id,
+        accountType: 'SCA',
+      });
+      
+      const dcw = wallets.data!.wallets![0];
+      console.log('   ✅ Wallet created:', dcw.address);
+
+      // Save to database
+      user = await prisma.user.create({
+        data: {
+          eoaAddress: checksummed,
+          dcwAddress: dcw.address!,
+          circleWalletId: dcw.id!,
+        },
+      });
+      
+      console.log(`✅ User saved to database: ${user.id}`);
+      return { eoa: checksummed, dcwAddress: user.dcwAddress, isNew: true };
+      
+    } catch (err: any) {
+      console.error('❌ Circle wallet creation failed:', err.message);
+      console.error('Full error:', err);
+      throw new Error('Failed to create Circle wallet: ' + err.message);
+    }
   }
 
+  console.log('✅ Existing user found:', user.id);
   return { eoa: user.eoaAddress, dcwAddress: user.dcwAddress, isNew: false };
 }
