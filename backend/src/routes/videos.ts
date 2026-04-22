@@ -54,7 +54,6 @@ const getAuthenticatedUser = (req: Request) => {
 };
 
 // --- ROUTES ---
-
 // ✅ Client upload handler endpoint for Vercel Blob
 router.post('/upload-token', async (req: Request, res: Response) => {
   console.log('📤 Upload token request received');
@@ -62,28 +61,17 @@ router.post('/upload-token', async (req: Request, res: Response) => {
   try {
     const body = req.body as HandleUploadBody;
     
-    // ✅ Extract clientPayload from the correct location
+    // Extract clientPayload for authentication
     let eoaAddress: string | null = null;
     
     try {
-      // The client payload comes in the body's payload.clientPayload field
       const payload = (body as any).payload?.clientPayload 
         ? JSON.parse((body as any).payload.clientPayload) 
         : null;
       eoaAddress = payload?.eoaAddress;
-      
       console.log('📝 EOA from clientPayload:', eoaAddress);
     } catch (e) {
       console.error('Failed to parse clientPayload:', e);
-    }
-
-    // Alternative: Check for EOA in headers as fallback
-    if (!eoaAddress) {
-      const authHeader = req.headers['authorization'];
-      if (authHeader?.startsWith('Bearer ')) {
-        eoaAddress = authHeader.slice(7);
-        console.log('📝 EOA from Authorization header:', eoaAddress);
-      }
     }
 
     if (!eoaAddress) {
@@ -91,27 +79,27 @@ router.post('/upload-token', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Authentication required.' });
     }
 
-    // ✅ Verify user exists in database
-    try {
-      const user = await prisma.user.findUnique({
-        where: { eoaAddress: getAddress(eoaAddress) }
-      });
+    // Verify user exists
+    const user = await prisma.user.findUnique({
+      where: { eoaAddress: getAddress(eoaAddress) }
+    });
 
-      if (!user) {
-        console.error('❌ User not found:', eoaAddress);
-        return res.status(401).json({ error: 'User not found.' });
-      }
-      console.log('✅ User authenticated:', user.eoaAddress);
-    } catch (err) {
-      console.error('❌ User lookup failed:', err);
-      return res.status(401).json({ error: 'Authentication failed.' });
+    if (!user) {
+      console.error('❌ User not found:', eoaAddress);
+      return res.status(401).json({ error: 'User not found.' });
     }
+    console.log('✅ User authenticated:', user.eoaAddress);
 
     if (!process.env.BLOB_READ_WRITE_TOKEN) {
       return res.status(500).json({ error: 'Blob storage not configured' });
     }
 
+    // ✅ Use environment variable or fallback
+    const callbackUrl = process.env.VERCEL_BLOB_CALLBACK_URL || 
+                       `${process.env.FRONTEND_URL || 'https://arcstream-backend.onrender.com'}/api/videos/upload-complete`;
+
     console.log('📤 Calling handleUpload...');
+    console.log('   Callback URL:', callbackUrl);
     
     const jsonResponse = await handleUpload({
       body,
@@ -121,17 +109,16 @@ router.post('/upload-token', async (req: Request, res: Response) => {
         const timestamp = Date.now();
         const safePath = `videos/${timestamp}-${pathname.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
         
-        console.log('📝 Generating token for path:', safePath);
-        
         return {
           pathname: safePath,
+          callbackUrl: callbackUrl,  // ✅ REQUIRED
+          access: 'public',          // ✅ Matches your public store
           allowedContentTypes: ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-msvideo'],
           maximumSizeInBytes: 5 * 1024 * 1024 * 1024, // 5GB
-          validUntil: Date.now() + 10 * 60 * 1000, // 10 minutes
         };
       },
       onUploadCompleted: async ({ blob }) => {
-        console.log('✅ Upload completed:', blob.url);
+        console.log('✅ Upload completed callback:', blob.url);
       },
     });
 
@@ -142,6 +129,15 @@ router.post('/upload-token', async (req: Request, res: Response) => {
     return res.status(400).json({ error: err.message });
   }
 });
+
+// Callback endpoint
+router.post('/upload-complete', async (req: Request, res: Response) => {
+  console.log('📥 Upload complete callback received');
+  res.status(200).json({ received: true });
+});
+
+
+
 
 // Confirm upload and create video record
 router.post('/confirm-upload', async (req: Request, res: Response) => {

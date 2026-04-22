@@ -2,13 +2,13 @@
 
 'use client';
 
-import { useState, ChangeEvent, FormEvent } from 'react';
+import { useState, ChangeEvent, FormEvent, useRef } from 'react';
 import { useWallet } from '@/components/WalletAuth';
 import { videoAPI } from '@/lib/api';
 import { upload } from '@vercel/blob/client';
 import toast from 'react-hot-toast';
 import { useRouter } from 'next/navigation';
-import { Upload as UploadIcon, FileVideo, Loader2, DollarSign, Settings } from 'lucide-react';
+import { Upload as UploadIcon, FileVideo, Loader2, DollarSign, Settings, X } from 'lucide-react';
 import { formatDuration } from '@/config/app';
 
 interface UploadForm {
@@ -25,6 +25,7 @@ const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024; // 5GB
 export default function UploadPage() {
   const { eoa: eoaAddress, dcwAddress } = useWallet();
   const router = useRouter();
+  const abortControllerRef = useRef<AbortController | null>(null);
   
   const [form, setForm] = useState<UploadForm>({
     title: '',
@@ -38,6 +39,8 @@ export default function UploadPage() {
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoDuration, setVideoDuration] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatus, setUploadStatus] = useState('');
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -46,22 +49,38 @@ export default function UploadPage() {
     }
   };
 
-  // ✅ CORRECT client-side upload using Vercel Blob client
-const uploadDirectToBlob = async (file: File): Promise<string> => {
-  console.log('📤 Starting client upload to Vercel Blob...');
-  
-  const blob = await upload(file.name, file, {
-    access: 'public',
-    handleUploadUrl: `${process.env.NEXT_PUBLIC_API_URL}/videos/upload-token`,
-    clientPayload: JSON.stringify({
-      eoaAddress: eoaAddress,  // ✅ Pass EOA address for authentication
-      filename: file.name,
-    }),
-  });
+  // ✅ CORRECT client-side upload with REAL progress tracking
+  const uploadDirectToBlob = async (file: File): Promise<string> => {
+    console.log('📤 Starting client upload to Vercel Blob...');
+    
+    const handleUploadUrl = `${process.env.NEXT_PUBLIC_API_URL}/videos/upload-token`;
+    console.log('   handleUploadUrl:', handleUploadUrl);
+    
+    // Create abort controller for cancellation
+    abortControllerRef.current = new AbortController();
+    
+    // @ts-ignore - onUploadProgress exists but types might be outdated
+    const blob = await upload(file.name, file, {
+      access: 'public',
+      handleUploadUrl: handleUploadUrl,
+      clientPayload: JSON.stringify({
+        eoaAddress: eoaAddress,
+        filename: file.name,
+      }),
+      abortSignal: abortControllerRef.current.signal,
+      // ✅ REAL progress tracking - built into the SDK!
+      onUploadProgress: (progressEvent: { loaded: number; total: number; percentage: number }) => {
+        const percent = Math.round(progressEvent.percentage);
+        setUploadProgress(percent);
+        setUploadStatus(`Uploading... ${percent}%`);
+        console.log(`📊 Upload progress: ${percent}% (${(progressEvent.loaded / 1024 / 1024).toFixed(2)} MB / ${(progressEvent.total / 1024 / 1024).toFixed(2)} MB)`);
+      },
+    });
 
-  console.log('✅ Blob upload complete:', blob.url);
-  return blob.url;
-};
+    console.log('✅ Blob upload complete:', blob.url);
+    return blob.url;
+  };
+
   const processFile = (file: File) => {
     if (file.size > MAX_FILE_SIZE) {
       toast.error(`File size must be less than 5GB`);
@@ -69,6 +88,8 @@ const uploadDirectToBlob = async (file: File): Promise<string> => {
     }
     
     setVideoFile(file);
+    setUploadProgress(0);
+    setUploadStatus('');
     
     const video = document.createElement('video');
     video.preload = 'metadata';
@@ -110,6 +131,16 @@ const uploadDirectToBlob = async (file: File): Promise<string> => {
     }
   };
 
+  const handleCancelUpload = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    setSubmitting(false);
+    setUploadProgress(0);
+    setUploadStatus('');
+    toast.error('Upload cancelled');
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     
@@ -123,17 +154,25 @@ const uploadDirectToBlob = async (file: File): Promise<string> => {
       return;
     }
 
+    if (!form.durationSeconds || parseInt(form.durationSeconds) < 1) {
+      toast.error('Please enter a valid video duration');
+      return;
+    }
+
     setSubmitting(true);
+    setUploadProgress(0);
+    setUploadStatus('Preparing upload...');
+    
     const sizeMB = (videoFile.size / (1024 * 1024)).toFixed(2);
-    const loadingToast = toast.loading(`Uploading ${sizeMB} MB to Vercel Blob...`);
+    toast.loading(`Starting upload (${sizeMB} MB)...`, { id: 'upload-toast' });
 
     try {
       const videoUrl = await uploadDirectToBlob(videoFile);
       
-      toast.dismiss(loadingToast);
-      toast.success('✅ Upload complete! Saving video...');
+      toast.dismiss('upload-toast');
+      toast.success('✅ Upload complete! Saving video...', { id: 'save-toast' });
+      setUploadStatus('Saving video metadata...');
       
-      const createToast = toast.loading('Saving video...');
       const res = await videoAPI.confirmUpload({
         videoUrl,
         title: form.title,
@@ -144,16 +183,25 @@ const uploadDirectToBlob = async (file: File): Promise<string> => {
         pricePerChunk: form.pricePerChunk,
       }, eoaAddress);
       
-      toast.dismiss(createToast);
+      toast.dismiss('save-toast');
       toast.success('✅ Video published successfully!');
       router.push(`/watch/${res.data.data.id}`);
       
     } catch (err: any) {
-      toast.dismiss(loadingToast);
+      toast.dismiss('upload-toast');
+      toast.dismiss('save-toast');
       console.error('Upload error:', err);
-      toast.error(err.message || 'Failed to publish video');
+      
+      if (err.name === 'AbortError' || err.message?.includes('abort')) {
+        toast.error('Upload cancelled');
+      } else {
+        toast.error(err.message || 'Failed to publish video');
+      }
     } finally {
       setSubmitting(false);
+      setUploadProgress(0);
+      setUploadStatus('');
+      abortControllerRef.current = null;
     }
   };
 
@@ -186,6 +234,7 @@ const uploadDirectToBlob = async (file: File): Promise<string> => {
         <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-700">
           <form onSubmit={handleSubmit} className="space-y-5">
             
+            {/* File Upload Area */}
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Select Video File
@@ -216,7 +265,7 @@ const uploadDirectToBlob = async (file: File): Promise<string> => {
                   {videoFile ? videoFile.name : 'Click or drag video here'}
                 </p>
                 <p className="text-xs text-gray-500 mt-2">
-                  MP4, MOV, or WebM (Up to 5GB)
+                  MP4, MOV, or WebM (Up to 5GB direct upload)
                 </p>
               </div>
               {videoFile && !submitting && (
@@ -227,19 +276,39 @@ const uploadDirectToBlob = async (file: File): Promise<string> => {
               )}
             </div>
 
+            {/* Upload Progress Bar */}
             {submitting && (
               <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium text-blue-700 dark:text-blue-300">
-                    Uploading to Vercel Blob...
+                    {uploadStatus || 'Preparing upload...'}
+                  </span>
+                  <span className="text-sm font-bold text-blue-700 dark:text-blue-300">
+                    {uploadProgress}%
                   </span>
                 </div>
-                <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                  <div className="h-full bg-blue-600 animate-pulse w-full" />
+                <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-gradient-to-r from-blue-500 to-blue-600 transition-all duration-300"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
+                </div>
+                <div className="flex justify-between items-center mt-2">
+                  <p className="text-xs text-blue-600 dark:text-blue-400">
+                    {uploadProgress < 100 ? 'Uploading... Please do not close this page.' : 'Processing...'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleCancelUpload}
+                    className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1"
+                  >
+                    <X size={12} /> Cancel
+                  </button>
                 </div>
               </div>
             )}
 
+            {/* Title */}
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Title</label>
               <input 
@@ -253,6 +322,7 @@ const uploadDirectToBlob = async (file: File): Promise<string> => {
               />
             </div>
 
+            {/* Description */}
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
               <textarea 
@@ -267,6 +337,7 @@ const uploadDirectToBlob = async (file: File): Promise<string> => {
               />
             </div>
 
+            {/* Duration & Price */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Duration (seconds)</label>
@@ -301,6 +372,7 @@ const uploadDirectToBlob = async (file: File): Promise<string> => {
               </div>
             </div>
 
+            {/* Chunk Configuration */}
             <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-700">
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3 flex items-center gap-2">
                 <Settings size={16} /> Chunk Configuration
@@ -341,21 +413,33 @@ const uploadDirectToBlob = async (file: File): Promise<string> => {
               </div>
             </div>
 
+            {/* Submit Button */}
             <button
               type="submit"
               disabled={submitting || !eoaAddress || !videoFile || !isValidChunk}
-              className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg flex items-center justify-center gap-2"
+              className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg flex items-center justify-center gap-2"
             >
               {submitting ? (
                 <>
                   <Loader2 size={20} className="animate-spin" />
-                  Uploading...
+                  {uploadStatus || 'Uploading...'}
                 </>
               ) : (
                 '🚀 Publish to ArcStream'
               )}
             </button>
           </form>
+        </div>
+        
+        {/* Tips */}
+        <div className="mt-6 p-4 bg-blue-50 dark:bg-blue-900/30 rounded-lg border border-blue-200 dark:border-blue-800">
+          <h3 className="font-medium text-blue-900 dark:text-blue-200 mb-2">💡 Upload Tips</h3>
+          <ul className="text-sm text-blue-800 dark:text-blue-300 space-y-1">
+            <li>• Maximum file size: 5GB (Vercel Blob)</li>
+            <li>• Minimum chunk: 5 seconds</li>
+            <li>• Maximum chunk: 60 minutes (3600 seconds)</li>
+            <li>• First chunk is always free for preview</li>
+          </ul>
         </div>
       </div>
     </main>
