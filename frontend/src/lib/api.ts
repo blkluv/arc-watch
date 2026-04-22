@@ -2,7 +2,6 @@
 import axios, { AxiosInstance } from 'axios';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
-const ARC_CHAIN_ID = '5042002'; 
 
 export const api: AxiosInstance = axios.create({
   baseURL: API_BASE,
@@ -41,20 +40,14 @@ export const videoAPI = {
   
   getVideo: (id: string) => api.get(`/videos/${id}`),
   
-  /**
-   * Upload video with metadata
-   * Supports FormData for Cloudinary file uploads
-   */
   create: (payload: FormData | Record<string, any>, eoaAddress: string) => {
     const isFormData = payload instanceof FormData;
     
     return api.post('/videos', payload, {
       headers: { 
         Authorization: `Bearer ${eoaAddress}`,
-        // Let axios set Content-Type automatically for FormData (includes boundary)
         ...(isFormData ? {} : { 'Content-Type': 'application/json' })
       },
-      // Longer timeout for uploads
       timeout: 180000, // 3 minutes
     });
   },
@@ -72,6 +65,7 @@ export const videoAPI = {
   requestChunkAccess: (videoId: string, chunkIndex: number, signedPayment?: SignedPayment) => {
     const headers: Record<string, string> = {};
     if (signedPayment) {
+      // ✅ Include the signature AND payer address in the auth header
       headers['X-Payment-Authorization'] = `${signedPayment.signature}:${signedPayment.payerAddress}`;
       headers['X-Payment-Nonce'] = signedPayment.paymentDetails.nonce;
       headers['X-Payment-Price'] = signedPayment.paymentDetails.price;

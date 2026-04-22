@@ -56,7 +56,7 @@ export default function VideoPlayer({
   const [autoPayProcessedForChunk, setAutoPayProcessedForChunk] = useState<Set<number>>(new Set());
 
   const { chunkSeconds, totalChunks } = calculateVideoChunks(durationSeconds, chunkDurationSeconds);
-const streamUrl = `${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'http://localhost:3001'}/api/videos/${videoId}/stream`;
+  const streamUrl = `${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'http://localhost:3001'}/api/videos/${videoId}/stream`;
   
   const isCurrentChunkPaid = unlockedChunks.has(currentChunk);
   const currentChunkEndTime = Math.min((currentChunk + 1) * chunkSeconds, durationSeconds);
@@ -101,7 +101,7 @@ const streamUrl = `${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'ht
     }
   }, [videoId, viewerWallet]);
 
-  // ✅ Auto-pay immediately when entering a chunk with locked next chunk
+  // Auto-pay immediately when entering a chunk with locked next chunk
   useEffect(() => {
     if (!autoPayEnabled) return;
     if (!playing || !ready || !mounted) return;
@@ -111,11 +111,9 @@ const streamUrl = `${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'ht
     
     const nextChunkIdx = currentChunk + 1;
     
-    // Don't auto-pay if already paid or already processed
     if (unlockedChunks.has(nextChunkIdx)) return;
     if (autoPayProcessedForChunk.has(nextChunkIdx)) return;
     
-    // ✅ Auto-pay immediately (no countdown)
     console.log(`⚡ Auto-paying for chunk ${nextChunkIdx} immediately`);
     handleAutoPayNext();
   }, [autoPayEnabled, playing, ready, currentChunk, totalChunks, unlockedChunks, 
@@ -123,14 +121,13 @@ const streamUrl = `${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'ht
 
   // Reset auto-pay processed flag when chunk changes
   useEffect(() => {
-    // Clear processed flag for the new chunk so auto-pay can work
     setAutoPayProcessedForChunk(prev => {
       const next = new Set(prev);
       return next;
     });
   }, [currentChunk]);
 
-  // ✅ Auto-pay for next chunk
+  // Auto-pay for next chunk
   const handleAutoPayNext = useCallback(async () => {
     const nextChunkIdx = currentChunk + 1;
     if (nextChunkIdx >= totalChunks) return;
@@ -156,7 +153,7 @@ const streamUrl = `${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'ht
     }
   }, [currentChunk, totalChunks, unlockedChunks]);
 
-  // ✅ Toggle auto-pay
+  // Toggle auto-pay
   const toggleAutoPay = useCallback(() => {
     setAutoPayEnabled(prev => {
       const newState = !prev;
@@ -166,7 +163,6 @@ const streamUrl = `${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'ht
           position: 'bottom-left',
           icon: '⚡',
         });
-        // Clear processed flags when enabling
         setAutoPayProcessedForChunk(new Set());
       } else {
         toast('Auto-pay disabled', {
@@ -251,11 +247,19 @@ const streamUrl = `${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'ht
       const signRes = await videoAPI.signChunk(videoId, chunkIndex, viewerWallet!);
       const { signature, nonce } = signRes.data.data;
       
+      // ✅ Use viewerDcw (DCW address) as payerAddress, NOT viewerWallet (EOA)
       const signedPayment: SignedPayment = {
         signature,
         paymentDetails: { ...paymentDetails, nonce },
         payerAddress: viewerDcw!,
       };
+      
+      console.log('📝 Submitting signed payment:', {
+        signature: signature.slice(0, 20) + '...',
+        payerAddress: viewerDcw,
+        nonce,
+        price: paymentDetails.price,
+      });
       
       await videoAPI.requestChunkAccess(videoId, chunkIndex, signedPayment);
       
@@ -391,7 +395,6 @@ const streamUrl = `${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'ht
     setCurrentTime(newTime);
     setCurrentChunk(newChunk);
     
-    // Clear auto-pay processed flag when seeking
     setAutoPayProcessedForChunk(prev => {
       const next = new Set(prev);
       next.delete(newChunk + 1);

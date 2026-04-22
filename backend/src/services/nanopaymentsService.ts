@@ -92,7 +92,7 @@ export async function verifyPaymentSignature(
   try {
     const parts = authHeader.split(':');
     if (parts.length < 2) return { valid: false, error: 'Invalid Header Format' };
-    const [signature] = parts;
+    const [signature, providedAddress] = parts; // ✅ Extract provided address
     
     const resource = context 
       ? `video:${context.videoId}:chunk:${context.chunkIndex}`
@@ -100,21 +100,48 @@ export async function verifyPaymentSignature(
     
     const message = `x402:${ARC_CHAIN_ID}:${resource}:${expectedPrice}:${nonce}`;
     
+    // Recover signer from signature
     const recoveredSigner = getAddress(await recoverMessageAddress({
       message,
       signature: signature as `0x${string}`,
     }));
 
-    const user = await prisma.user.findFirst({
+    console.log('🔐 Signature Verification:');
+    console.log('   Message:', message);
+    console.log('   Signature:', signature.slice(0, 20) + '...');
+    console.log('   Provided address:', providedAddress);
+    console.log('   Recovered signer:', recoveredSigner);
+
+    // ✅ Try multiple ways to find the user
+    let user = await prisma.user.findFirst({
       where: { 
-        dcwAddress: { equals: recoveredSigner, mode: 'insensitive' } 
+        OR: [
+          { dcwAddress: { equals: recoveredSigner, mode: 'insensitive' } },
+          { dcwAddress: { equals: providedAddress, mode: 'insensitive' } },
+          { eoaAddress: { equals: recoveredSigner, mode: 'insensitive' } },
+        ]
       }
     });
 
+    // If still not found, try case-insensitive search
     if (!user) {
-      console.error(`❌ Signer not recognized: ${recoveredSigner}`);
-      return { valid: false, error: 'Signer not recognized' };
+      console.log('⚠️ Direct match failed, trying case-insensitive search...');
+      const allUsers = await prisma.user.findMany();
+      user = allUsers.find(u => 
+        u.dcwAddress.toLowerCase() === recoveredSigner.toLowerCase() ||
+        u.dcwAddress.toLowerCase() === providedAddress?.toLowerCase() ||
+        u.eoaAddress.toLowerCase() === recoveredSigner.toLowerCase()
+      ) || null;
     }
+
+    if (!user) {
+      console.error(`❌ Signer not recognized. Recovered: ${recoveredSigner}, Provided: ${providedAddress}`);
+      const allUsers = await prisma.user.findMany();
+      console.error('   Available DCWs in DB:', allUsers.map(u => u.dcwAddress));
+      return { valid: false, error: `Signer not recognized. Please reconnect your wallet.` };
+    }
+
+    console.log('✅ User found:', user.eoaAddress, 'DCW:', user.dcwAddress);
 
     return {
       valid: true,
